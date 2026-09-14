@@ -1,49 +1,52 @@
 """
-Extração do "Espelho de Ponto" (Senior Sistemas) em PDF para os modelos de
-ponto_auditor.modelos.
+Extração do "Cartão Ponto" / espelho de ponto (Senior Sistemas) em PDF.
 
-STATUS: implementação inicial (v0), ainda **não calibrada** contra um PDF real
-de espelho de ponto — só foi validada a lógica de regras/apuração (ver
-tests/test_regras.py), que usa dados já estruturados. O layout de colunas do
-Senior varia por cliente/versão, então este parser:
+Layout confirmado contra um PDF real cedido pelo usuário (uma página por
+colaborador, tabela diária com Data/Sem/Hor/Marcações + Trabalho/Faltas/
+Atrasos + Extras 50/60/70/80/100/110% + Adic. Not, fechando com um bloco
+"Totais de Horas"). A extração usa a POSIÇÃO horizontal de cada palavra
+(via pdfplumber), não a ordem do texto plano: colunas de tabela em PDF não
+garantem que o texto saia na ordem visual quando lido em uma única string,
+então cada palavra é classificada pela banda de coluna em que seu x0 cai.
 
-  1. assume um layout típico (ver âncoras abaixo), documentado em cada regex;
-  2. se recusa a adivinhar em caso de ambiguidade — levanta ErroDeLeitura em
-     vez de produzir números de jornada errados, o que é inaceitável num
-     relatório usado para apurar conformidade com a CLT;
-  3. deve ser recalibrado assim que houver um PDF real de amostra: rode com
-     ``--debug`` para dumpar o texto bruto extraído de cada página e ajustar
-     os padrões abaixo por comparação linha a linha.
+As bandas de coluna são detectadas dinamicamente a partir da própria linha
+de cabeçalho da tabela ("Data Sem Hor Marcações Trabalho Faltas Atrasos
+50% 60% 70% 80% 100% 110% Adic. Not") em vez de fixadas em pontos, para
+tolerar pequenas variações de margem entre exportações.
 
-Ver também ``modo_json`` no CLI: enquanto o parser não estiver calibrado, os
-dados podem ser fornecidos já estruturados em JSON (mesmo formato usado nos
-testes, em tests/fixtures/espelho_amostra.json) para não bloquear o uso do
-motor de regras e do gerador de painel.
+Ver tests/test_parser_pdf.py: reproduz esse layout sinteticamente (mesmos
+nomes de coluna, dados de 6 colaboradores reais com nomes trocados) e
+confere a extração + ponto_auditor.calculos contra os valores originais.
 """
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .modelos import Colaborador, DiaPonto, Periodo
 
-DIAS_SEMANA = {"SEG", "TER", "QUA", "QUI", "SEX", "SAB", "DOM"}
+DIAS_SEMANA = ("SEG", "TER", "QUA", "QUI", "SEX", "SAB", "DOM")
 
-# Cabeçalho de colaborador: "16447 - ABILIO MONTEIRO" ou "Matrícula: 16447  Nome: ABILIO MONTEIRO"
-RE_CABECALHO_MAT_NOME = re.compile(
-    r"(?:Matr[ií]cula[:\s]+)?(\d{3,8})\s*[-–]\s*([A-ZÀ-Ú][A-ZÀ-Ú\s'\.]{2,60})"
-)
+RE_DATA = re.compile(r"^\d{2}/\d{2}$")
+RE_HORA = re.compile(r"^-?\d{1,3}:\d{2}$")
+RE_HCOD = re.compile(r"^\d{4}$")
 
-# Linha de dia: "21/08 SEX 18:01 00:00 01:00 06:59 ..." — data, dia da semana e até 4 marcações.
-RE_LINHA_DIA = re.compile(
-    r"^(?P<data>\d{2}/\d{2})\s+(?P<sem>SEG|TER|QUA|QUI|SEX|SAB|DOM)\s+(?P<resto>.*)$"
-)
-RE_HORA = re.compile(r"\b([0-2]\d:[0-5]\d)\b")
+RE_PERIODO = re.compile(r"Per[ií]odo\s*:\s*(\d{2}/\d{2}/\d{4})\s*a\s*(\d{2}/\d{2}/\d{4})")
+RE_PAGINA = re.compile(r"P[áa]g\.?:\s*(\d+)")
+RE_EMPREGADOR = re.compile(r"Empregador:\s*\d+\s+(.+?)(?:\s{2,}|\s+CNPJ:|$)")
+RE_CNPJ = re.compile(r"CNPJ:\s*([\d./-]+)")
+RE_EMPREGADO = re.compile(r"Emprega?do:\s*(\d{2,8})\s+(.+?)(?:\s{2,}|\s+CTPS:|$)")
+RE_CARGO = re.compile(r"Cargo:\s*(.+?)\s{2,}Localiza")
+RE_MOD = re.compile(r"MOD\s+(.+)$")
 
-# Bloco de totais do relatório inteiro — precisa ser detectado e descartado,
-# nunca absorvido pelo último colaborador da lista (ver nota da skill irmã
-# relatorio-operacional-bi sobre o bug do "Total Geral").
-RE_TOTAL_GERAL = re.compile(r"TOTAL\s+GERAL", re.IGNORECASE)
+# Nomes de coluna esperados no cabeçalho da tabela — usados para achar as
+# bandas horizontais (não a posição em si, que varia por exportação).
+COLUNAS_TABELA = {
+    "Data": "data", "Sem": "sem", "Hor": "hor", "Marcações": "marc",
+    "Trabalho": "trab", "Faltas": "falt", "Atrasos": "atr",
+    "50%": "e50", "60%": "e60", "70%": "e70", "80%": "e80",
+    "100%": "e100", "110%": "e110",
+}
 
 
 class ErroDeLeitura(Exception):
@@ -54,113 +57,214 @@ class ErroDeLeitura(Exception):
 
 
 @dataclass
-class LinhaBruta:
-    pagina: int
-    texto: str
+class _Pagina:
+    numero: int
+    palavras: list[dict] = field(default_factory=list)
+    linhas_texto: list[str] = field(default_factory=list)
 
 
-def extrair_linhas(caminho_pdf: str, debug: bool = False) -> list[LinhaBruta]:
-    """Lê o PDF e devolve todas as linhas de texto, por página.
-
-    Requer o pacote `pdfplumber` (não incluso em requirements.txt até este
-    parser ser calibrado com um PDF real — instale com
-    ``pip install pdfplumber`` para testar).
-    """
+def _extrair_paginas(caminho_pdf: str) -> list[_Pagina]:
     try:
         import pdfplumber
-    except ImportError as exc:  # pragma: no cover - depende de ambiente
+    except ImportError as exc:  # pragma: no cover - depende do ambiente
         raise RuntimeError(
-            "pdfplumber não instalado. Rode `pip install pdfplumber` para "
-            "extrair PDFs do espelho de ponto."
+            "pdfplumber não instalado. Rode `pip install pdfplumber`."
         ) from exc
 
-    linhas: list[LinhaBruta] = []
+    paginas = []
     with pdfplumber.open(caminho_pdf) as pdf:
         for i, pagina in enumerate(pdf.pages, start=1):
+            palavras = pagina.extract_words(keep_blank_chars=False, use_text_flow=False)
             texto = pagina.extract_text() or ""
-            for linha in texto.splitlines():
-                linha = linha.strip()
-                if linha:
-                    linhas.append(LinhaBruta(pagina=i, texto=linha))
-    if debug:  # pragma: no cover - utilitário manual
-        for l in linhas:
-            print(f"[p{l.pagina}] {l.texto}")
+            paginas.append(_Pagina(numero=i, palavras=palavras, linhas_texto=texto.splitlines()))
+    return paginas
+
+
+def _agrupar_em_linhas(palavras: list[dict], tolerancia: float = 2.5) -> list[list[dict]]:
+    """Agrupa palavras na mesma linha visual (mesmo 'top', com tolerância),
+    ordenadas da esquerda para a direita."""
+    ordenadas = sorted(palavras, key=lambda w: (w["top"], w["x0"]))
+    linhas: list[list[dict]] = []
+    for w in ordenadas:
+        if linhas and abs(w["top"] - linhas[-1][0]["top"]) <= tolerancia:
+            linhas[-1].append(w)
+        else:
+            linhas.append([w])
+    for linha in linhas:
+        linha.sort(key=lambda w: w["x0"])
     return linhas
 
 
-def _fechar_colaborador(matricula, nome, dias, colaboradores):
-    if matricula is None:
-        return
-    if not dias:
-        # colaborador sem nenhum dia lido é sinal de que o layout não bateu
-        raise ErroDeLeitura(
-            f"Matrícula {matricula} ({nome}) não teve nenhum dia reconhecido — "
-            "o layout de colunas provavelmente difere do esperado por este "
-            "parser. Rode com --debug e ajuste RE_LINHA_DIA em parser_pdf.py."
-        )
-    colaboradores.append(
-        Colaborador(matricula=matricula, nome=(nome or "").strip(), dias=list(dias))
-    )
+def _detectar_bandas(linhas: list[list[dict]]) -> tuple[int, dict[str, tuple[float, float]]] | None:
+    """Acha a linha de cabeçalho da tabela e devolve (índice_da_linha,
+    {campo: (x_inicio, x_fim)}). x_fim da última banda é +inf."""
+    for idx, linha in enumerate(linhas):
+        textos = {w["text"] for w in linha}
+        if {"Data", "Marcações", "Trabalho"} <= textos:
+            achadas: dict[str, float] = {}
+            for w in linha:
+                campo = COLUNAS_TABELA.get(w["text"])
+                if campo and campo not in achadas:
+                    achadas[campo] = w["x0"]
+            # "Adic." e "Not" podem estar em palavras separadas
+            adic = next((w for w in linha if w["text"].startswith("Adic")), None)
+            if adic:
+                achadas["adnot"] = adic["x0"]
+            if len(achadas) < 8:
+                continue
+            ordenadas = sorted(achadas.items(), key=lambda kv: kv[1])
+            bandas = {}
+            for i, (campo, x0) in enumerate(ordenadas):
+                x_fim = ordenadas[i + 1][1] if i + 1 < len(ordenadas) else float("inf")
+                bandas[campo] = (x0 - 4, x_fim - 4)  # -4: tolerância p/ largura do rótulo
+            return idx, bandas
+    return None
 
 
-def parse_espelho_pdf(caminho_pdf: str, debug: bool = False) -> list[Colaborador]:
-    """Extrai a lista de colaboradores (com seus dias) de um espelho de ponto.
+def _campo_da_banda(x0: float, bandas: dict[str, tuple[float, float]]) -> str | None:
+    for campo, (ini, fim) in bandas.items():
+        if ini <= x0 < fim:
+            return campo
+    return None
 
-    Não preenche encarregado/setor/função/mão-de-obra — esses vêm do cadastro
-    de efetivo (ver ``efetivo.py``) e são cruzados por matrícula depois.
-    """
-    linhas = extrair_linhas(caminho_pdf, debug=debug)
+
+def _hm_para_minutos(txt: str) -> int:
+    neg = txt.startswith("-")
+    txt = txt.lstrip("-")
+    h, m = txt.split(":")
+    valor = int(h) * 60 + int(m)
+    return -valor if neg else valor
+
+
+def _parse_cabecalho_pagina(linhas_texto: list[str]) -> dict:
+    info: dict = {}
+    for linha in linhas_texto:
+        if m := RE_PERIODO.search(linha):
+            info["ini"], info["fim"] = m.group(1), m.group(2)
+        if m := RE_PAGINA.search(linha):
+            info["pagina"] = int(m.group(1))
+        if m := RE_EMPREGADOR.search(linha):
+            info["empresa"] = m.group(1).strip()
+        if m := RE_CNPJ.search(linha):
+            info["cnpj"] = m.group(1).strip()
+        if m := RE_EMPREGADO.search(linha):
+            info["matricula"], info["nome"] = m.group(1).strip(), m.group(2).strip()
+        if m := RE_CARGO.search(linha):
+            info["cargo"] = m.group(1).strip()
+        if m := RE_MOD.search(linha):
+            info["obra"] = m.group(1).strip()
+    return info
+
+
+def _parse_escala(linhas_texto: list[str]) -> list[str]:
+    escala = []
+    dentro = False
+    for linha in linhas_texto:
+        if linha.strip().startswith("Horários"):
+            dentro = True
+            continue
+        if dentro:
+            if re.match(r"^\d{4}\s+\d{2}:\d{2}", linha.strip()):
+                escala.append(linha.strip())
+            else:
+                break
+    return escala
+
+
+def _parse_dias_da_pagina(pagina: _Pagina) -> list[DiaPonto]:
+    linhas = _agrupar_em_linhas(pagina.palavras)
+    achou = _detectar_bandas(linhas)
+    if achou is None:
+        return []
+    idx_cabecalho, bandas = achou
+
+    dias: list[DiaPonto] = []
+    for linha in linhas[idx_cabecalho + 1:]:
+        primeiro_texto = linha[0]["text"]
+        if primeiro_texto.startswith("Totais"):
+            break
+        if not RE_DATA.match(primeiro_texto):
+            continue  # linha de rodapé/assinatura ou continuação — ignora
+
+        valores: dict[str, list[str]] = {}
+        for w in linha:
+            campo = _campo_da_banda(w["x0"], bandas)
+            if campo:
+                valores.setdefault(campo, []).append(w["text"])
+
+        data = valores.get("data", [""])[0]
+        sem = valores.get("sem", [""])[0]
+        hcod = valores.get("hor", [""])[0]
+        tokens_marc = valores.get("marc", [])
+        marc = [t for t in tokens_marc if re.match(r"^\d{2}:\d{2}$", t)]
+        obs = " ".join(t for t in tokens_marc if not re.match(r"^\d{2}:\d{2}$", t))
+
+        def hm(campo: str) -> int:
+            vals = [v for v in valores.get(campo, []) if RE_HORA.match(v)]
+            return _hm_para_minutos(vals[0]) if vals else 0
+
+        dias.append(DiaPonto(
+            data=data, dia_semana=sem, marc=marc, obs=obs, codigo_horario=hcod,
+            trabalhado=hm("trab"), falta=hm("falt"), atraso=hm("atr"),
+            e50=hm("e50"), e110=hm("e110"),
+            e_out=hm("e60") + hm("e70") + hm("e80") + hm("e100"),
+            adicional_noturno=hm("adnot"),
+        ))
+    return dias
+
+
+def parse_espelho_pdf(caminho_pdf: str, debug: bool = False) -> Periodo:
+    paginas = _extrair_paginas(caminho_pdf)
+    if debug:  # pragma: no cover - utilitário manual
+        for p in paginas:
+            print(f"--- página {p.numero} ---")
+            for l in p.linhas_texto:
+                print(l)
 
     colaboradores: list[Colaborador] = []
-    matricula_atual = nome_atual = None
-    dias_atual: list[DiaPonto] = []
-    dentro_total_geral = False
+    meta_geral: dict = {}
 
-    for l in linhas:
-        texto = l.texto
+    for pagina in paginas:
+        info = _parse_cabecalho_pagina(pagina.linhas_texto)
+        if "matricula" not in info:
+            continue  # página sem cabeçalho de colaborador (ex.: capa, resumo)
 
-        if RE_TOTAL_GERAL.search(texto):
-            # bloco de somatório do relatório inteiro: fecha o colaborador
-            # corrente (se houver) e ignora tudo até o próximo cabeçalho.
-            _fechar_colaborador(matricula_atual, nome_atual, dias_atual, colaboradores)
-            matricula_atual = nome_atual = None
-            dias_atual = []
-            dentro_total_geral = True
-            continue
+        for chave in ("ini", "fim", "empresa", "cnpj"):
+            if chave in info and chave not in meta_geral:
+                meta_geral[chave] = info[chave]
+        if "obra" in info and "obra" not in meta_geral:
+            meta_geral["obra"] = info["obra"]
 
-        m_cab = RE_CABECALHO_MAT_NOME.match(texto)
-        if m_cab:
-            _fechar_colaborador(matricula_atual, nome_atual, dias_atual, colaboradores)
-            matricula_atual, nome_atual = m_cab.group(1), m_cab.group(2)
-            dias_atual = []
-            dentro_total_geral = False
-            continue
+        dias = _parse_dias_da_pagina(pagina)
+        if not dias:
+            raise ErroDeLeitura(
+                f"Página {pagina.numero}: colaborador {info['matricula']} "
+                f"({info.get('nome','?')}) sem nenhum dia reconhecido na tabela — "
+                "o layout de colunas pode diferir do esperado. Rode com --debug."
+            )
 
-        if dentro_total_geral or matricula_atual is None:
-            continue
-
-        m_dia = RE_LINHA_DIA.match(texto)
-        if not m_dia:
-            continue
-
-        horas = RE_HORA.findall(m_dia.group("resto"))
-        dias_atual.append(
-            DiaPonto(data=m_dia.group("data"), dia_semana=m_dia.group("sem"), marc=horas)
-        )
-
-    _fechar_colaborador(matricula_atual, nome_atual, dias_atual, colaboradores)
+        colaboradores.append(Colaborador(
+            matricula=info["matricula"], nome=info.get("nome", ""),
+            cargo=info.get("cargo", ""), escala=_parse_escala(pagina.linhas_texto),
+            dias=dias,
+        ))
 
     if not colaboradores:
         raise ErroDeLeitura(
             "Nenhum colaborador reconhecido no PDF. Verifique se é de fato um "
-            "espelho de ponto do Senior Sistemas e rode com --debug para "
-            "inspecionar o texto extraído."
+            "Cartão Ponto/espelho do Senior Sistemas e rode com --debug."
         )
-    return colaboradores
 
+    dias_periodo = sorted({d.data for c in colaboradores for d in c.dias})
+    dia_semana_por_data = {d.data: d.dia_semana for c in colaboradores for d in c.dias}
+    ano = 0
+    if meta_geral.get("ini"):
+        ano = int(meta_geral["ini"].split("/")[-1])
 
-def montar_periodo(colaboradores: list[Colaborador], **meta) -> Periodo:
-    """Monta o Periodo a partir da lista de colaboradores e metadados do
-    cabeçalho do relatório (obra, empresa, cnpj, datas...), fornecidos
-    manualmente até o parser extrair esse bloco automaticamente."""
-    return Periodo(colaboradores=colaboradores, **meta)
+    return Periodo(
+        inicio=meta_geral.get("ini", ""), fim=meta_geral.get("fim", ""), ano=ano,
+        empresa=meta_geral.get("empresa", ""), cnpj=meta_geral.get("cnpj", ""),
+        obra=meta_geral.get("obra", ""), gerado_em="",
+        dias=dias_periodo, dia_semana_por_data=dia_semana_por_data,
+        colaboradores=colaboradores,
+    )

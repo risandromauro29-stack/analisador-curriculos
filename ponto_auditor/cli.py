@@ -29,36 +29,33 @@ def _construir_periodo(args) -> Periodo:
         db = json.loads(Path(args.json).read_text(encoding="utf-8"))
         return db_para_periodo(db)
 
-    from .parser_pdf import ErroDeLeitura, montar_periodo, parse_espelho_pdf
+    from .calculos import aplicar_calculos
+    from .parser_pdf import ErroDeLeitura, parse_espelho_pdf
 
     try:
-        colaboradores = parse_espelho_pdf(args.pdf, debug=args.debug)
+        periodo = parse_espelho_pdf(args.pdf, debug=args.debug)
     except ErroDeLeitura as e:
         print(f"Erro de leitura do PDF: {e}", file=sys.stderr)
         sys.exit(1)
+
+    # sobrescreve metadados do cabeçalho do PDF só quando informados na CLI
+    for campo, valor in (("inicio", args.inicio), ("fim", args.fim),
+                          ("empresa", args.empresa), ("cnpj", args.cnpj),
+                          ("obra", args.obra), ("gerado_em", args.gerado_em)):
+        if valor:
+            setattr(periodo, campo, valor)
+    if args.ano:
+        periodo.ano = args.ano
 
     if args.efetivo:
         from .efetivo import aplicar_efetivo, carregar_efetivo
 
         registros = carregar_efetivo(args.efetivo)
-        sem_cadastro = aplicar_efetivo(colaboradores, registros)
-    else:
-        sem_cadastro = 0
+        periodo.sem_cadastro = aplicar_efetivo(periodo.colaboradores, registros)
 
-    dias = sorted({d.data for c in colaboradores for d in c.dias})
-    return montar_periodo(
-        colaboradores,
-        inicio=args.inicio or (dias[0] if dias else ""),
-        fim=args.fim or (dias[-1] if dias else ""),
-        ano=args.ano,
-        empresa=args.empresa or "",
-        cnpj=args.cnpj or "",
-        obra=args.obra or "",
-        gerado_em=args.gerado_em or "",
-        dias=dias,
-        dia_semana_por_data={d.data: d.dia_semana for c in colaboradores for d in c.dias},
-        sem_cadastro=sem_cadastro,
-    )
+    for colaborador in periodo.colaboradores:
+        aplicar_calculos(colaborador)
+    return periodo
 
 
 def cmd_auditar(args) -> None:

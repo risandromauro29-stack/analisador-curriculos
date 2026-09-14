@@ -12,11 +12,14 @@ descanso).
 | Peça | Status |
 |---|---|
 | Motor de regras CLT (`regras.py`) | ✅ Validado — recalculado sobre 11.130 dias/colaborador reais, bateu 100% com os alertas já publicados (ver `tests/test_regras.py`) |
+| Cálculo de campos derivados — intervalo, interjornada, jornada apurada, saída prevista (`calculos.py`) | ✅ Validado contra o backend original, dia a dia (ver `tests/test_parser_pdf.py`) |
+| Extração do PDF do Cartão Ponto / espelho (`parser_pdf.py`) | ✅ Calibrada contra um PDF real cedido pelo usuário (layout Senior Sistemas) e validada ponta a ponta com um PDF sintético de 6 colaboradores × 21 dias reais |
 | Modelos e conversão para o painel (`modelos.py`) | ✅ Testado (round-trip) |
 | Gerador do painel HTML (`relatorio.py`) | ✅ Testado — reaproveita o template completo (mesmo CSS/JS/gráficos) |
 | Resumo textual/JSON da auditoria (`relatorio.py`) | ✅ Testado |
 | Cadastro de efetivo — encarregado/setor/função (`efetivo.py`) | ✅ Implementado (xlsx) |
-| **Extração do PDF do espelho de ponto (`parser_pdf.py`)** | ⚠️ **v0, não calibrado** — precisa de um PDF real de amostra (ver abaixo) |
+
+Todas as peças passam em `pytest` (10 testes) rodando com dados reais (anonimizados). O único ponto ainda não coberto por um teste automático é uma segunda exportação do Senior com layout diferente do observado — se aparecer um PDF que o parser rejeite, rode com `--debug` e ajuste `parser_pdf.py` (a lógica de bandas de coluna é dinâmica, então pequenas variações de margem já são toleradas; mudanças de rótulo de coluna ou de ordem não são).
 
 ## Uso
 
@@ -41,19 +44,41 @@ Gera em `saida/`:
 - `resumo_auditoria.md` — leitura rápida dos KPIs sem abrir o painel
 - `resumo_auditoria.json` — os mesmos indicadores, estruturados
 
-## Por que o parser de PDF ainda não está pronto
+## Como o parser foi calibrado e validado
 
-O espelho de ponto do Senior Sistemas varia de layout conforme a
-configuração de cada empresa (colunas, códigos de horário, formatação da
-tabela). O motor de regras foi validado com precisão contra dados **já
-extraídos** — o que falta é calibrar a extração do texto bruto do PDF para
-esse formato específico. Isso exige um PDF real (ou fictício, mas com a
-mesma estrutura de colunas) para ajustar as expressões regulares em
-`parser_pdf.py` (rode com `--debug` para inspecionar o texto extraído
-página a página).
+O layout do "Cartão Ponto" (Senior Sistemas) foi obtido de um PDF real
+cedido pelo usuário: uma página por colaborador, com cabeçalho
+(empregador/CNPJ/empregado/cargo/escala) e uma tabela diária de
+Data/Sem/Hor/Marcações + Trabalho/Faltas/Atrasos + Extras 50–110% +
+Adicional Noturno, fechando com um bloco "Totais de Horas". A extração
+usa a **posição horizontal** de cada palavra (via `pdfplumber`), com as
+bandas de coluna detectadas dinamicamente a partir do próprio cabeçalho
+da tabela — não fixadas em pontos — para tolerar pequenas variações de
+margem entre exportações.
 
-Até lá, o pipeline completo (regras → painel → resumo) pode ser usado com
-`--json`, no mesmo formato de `tests/fixtures/espelho_amostra.json`.
+Os campos que o PDF não traz prontos (intervalo, interjornada, jornada
+apurada, saída prevista, atraso de saída, regime 12x36) são derivados em
+`calculos.py` com fórmulas decifradas comparando esse PDF real com os
+valores já calculados para o mesmo colaborador/período no painel de
+referência (ver os comentários de `calculos.py` e `parser_pdf.py`).
+
+`tests/fixtures/gerar_pdf_amostra.py` gera um PDF sintético que reproduz
+esse layout com dados de 6 colaboradores reais (nomes/matrículas
+trocados por fictícios, valores de dias mantidos) — cobrindo as 6 regras
+de conformidade, regime 12x36 com virada de meia-noite, marcações
+ímpares/inválidas, DSR e feriado. `tests/test_parser_pdf.py` roda o PDF
+pelo parser + `calculos.py` + `regras.py` e confere, dia a dia, os 126
+registros contra o que o backend original já havia calculado — bateu
+100%.
+
+Se aparecer uma exportação do Senior com layout diferente (rótulos de
+coluna diferentes, mais páginas por colaborador etc.), rode
+`python -m ponto_auditor auditar arquivo.pdf --debug` para inspecionar o
+texto extraído e ajustar `parser_pdf.py`.
+
+Alternativamente, o pipeline completo (regras → painel → resumo) também
+aceita dados já estruturados com `--json`, no formato de
+`tests/fixtures/espelho_amostra.json`.
 
 ## Regras de conformidade aplicadas
 
