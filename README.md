@@ -105,5 +105,14 @@ pip3 install PyPDF2
 
 ---
 
+## 🕒 Ponto Auditor (novo)
+
+Este repositório também inclui o **`ponto_auditor/`**, um sistema separado de
+auditoria de espelhos de ponto frente à CLT (horas extras, jornada máxima,
+intervalos, marcações inválidas, trabalho em dia de descanso). Veja
+[`ponto_auditor/README.md`](ponto_auditor/README.md) para uso e status.
+
+---
+
 **Desenvolvido por:** Manus AI  
 **Versão:** 1.0.0

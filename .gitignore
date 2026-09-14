@@ -31,6 +31,12 @@ curriculos/*.pdf
 relatorio_analise.md
 resultados.json
 
+# Ponto Auditor — entradas e saídas com dados pessoais de colaboradores
+ponto_auditor_dados/
+saida/
+*.espelho.pdf
+.pytest_cache/
+
 # IDEs
 .vscode/
 .idea/
