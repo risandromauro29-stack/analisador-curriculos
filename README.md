@@ -112,6 +112,12 @@ auditoria de espelhos de ponto frente à CLT (horas extras, jornada máxima,
 intervalos, marcações inválidas, trabalho em dia de descanso). Veja
 [`ponto_auditor/README.md`](ponto_auditor/README.md) para uso e status.
 
+Ele também está disponível como **site com login multiusuário**
+(`webapp/`): cada pessoa entra com seu usuário, envia o PDF do Cartão
+Ponto e consulta o histórico de auditorias já processadas. Veja
+[`DEPLOY.md`](DEPLOY.md) para colocar no ar (Render/Railway, grátis) ou
+rodar localmente.
+
 ---
 
 **Desenvolvido por:** Manus AI  

@@ -22,13 +22,21 @@ def aplicar_regras(periodo: Periodo) -> None:
             dia.alertas = regras.avaliar_dia(colaborador, dia)
 
 
-def gerar_painel_html(periodo: Periodo, caminho_saida: str | Path) -> Path:
-    """Gera o painel HTML interativo (offline, arquivo único) a partir do Periodo."""
+def renderizar_painel_html(periodo: Periodo) -> str:
+    """Monta o HTML do painel interativo (mesmo template do painel de
+    referência) a partir do Periodo, como string — sem tocar em disco.
+    Usado tanto pelo CLI (que grava em arquivo) quanto pela webapp (que
+    guarda o resultado no banco e serve sob demanda)."""
     db = periodo_para_db(periodo)
     template = TEMPLATE_PATH.read_text(encoding="utf-8")
     if PLACEHOLDER not in template:
         raise RuntimeError(f"Placeholder {PLACEHOLDER!r} não encontrado no template.")
-    html = template.replace(PLACEHOLDER, json.dumps(db, ensure_ascii=False))
+    return template.replace(PLACEHOLDER, json.dumps(db, ensure_ascii=False))
+
+
+def gerar_painel_html(periodo: Periodo, caminho_saida: str | Path) -> Path:
+    """Gera o painel HTML interativo (offline, arquivo único) a partir do Periodo."""
+    html = renderizar_painel_html(periodo)
     destino = Path(caminho_saida)
     destino.write_text(html, encoding="utf-8")
     return destino

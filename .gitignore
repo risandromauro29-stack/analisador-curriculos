@@ -37,6 +37,11 @@ saida/
 *.espelho.pdf
 .pytest_cache/
 
+# Webapp — segredos e banco local
+.env
+*.db
+instance/
+
 # IDEs
 .vscode/
 .idea/

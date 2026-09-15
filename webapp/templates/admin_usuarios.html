@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block titulo %}Usuários{% endblock %}
+{% block conteudo %}
+<h1>Usuários</h1>
+<p class="sub">Quem pode acessar o Auditor de Ponto.</p>
+
+{% if senha_gerada %}
+<div class="card" style="border-color:var(--ok)">
+  <strong>Senha gerada:</strong> <code>{{ senha_gerada }}</code><br>
+  <span class="ajuda">Copie agora e envie por um canal seguro — ela não aparece de novo.</span>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Novo usuário</h2>
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label for="nome">Nome</label>
+    <input type="text" id="nome" name="nome" required>
+    <label for="email">E-mail (login)</label>
+    <input type="email" id="email" name="email" required>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:14px;font-weight:500">
+      <input type="checkbox" name="is_admin" style="width:auto"> Administrador (pode gerenciar usuários)
+    </label>
+    <button type="submit" style="margin-top:16px">Criar usuário</button>
+  </form>
+  <p class="ajuda">A senha é gerada automaticamente e mostrada uma única vez.</p>
+</div>
+
+<div class="card" style="padding:0">
+  <table>
+    <thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Status</th><th>Criado em</th><th></th></tr></thead>
+    <tbody>
+      {% for u in usuarios %}
+      <tr>
+        <td>{{ u.nome }}</td>
+        <td>{{ u.email }}</td>
+        <td>{{ 'Administrador' if u.is_admin else 'Usuário' }}</td>
+        <td>{% if u.ativo %}<span class="pill ok">ativo</span>{% else %}<span class="pill crit">desativado</span>{% endif %}</td>
+        <td>{{ u.criado_em.strftime('%d/%m/%Y') if u.criado_em else '—' }}</td>
+        <td style="white-space:nowrap;display:flex;gap:8px">
+          <form method="post" action="{{ url_for('admin.redefinir_senha', usuario_id=u.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn ghost" style="padding:5px 10px;font-size:12px">redefinir senha</button>
+          </form>
+          {% if u.id != current_user.id %}
+          <form method="post" action="{{ url_for('admin.alternar_ativo', usuario_id=u.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn ghost" style="padding:5px 10px;font-size:12px">
+              {{ 'desativar' if u.ativo else 'ativar' }}
+            </button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

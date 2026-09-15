@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block titulo %}Auditoria #{{ auditoria.id }}{% endblock %}
+{% block conteudo %}
+<div class="toolbar">
+  <div>
+    <h1>{{ auditoria.obra or auditoria.nome_arquivo or ('Auditoria #' ~ auditoria.id) }}</h1>
+    <p class="sub" style="margin:0">
+      {{ auditoria.empresa or '' }}
+      {% if auditoria.periodo_inicio %} · Período {{ auditoria.periodo_inicio }} a {{ auditoria.periodo_fim }}{% endif %}
+      · enviado em {{ auditoria.criado_em.strftime('%d/%m/%Y %H:%M') if auditoria.criado_em else '—' }}
+    </p>
+  </div>
+  <a class="btn ghost" href="{{ url_for('auditorias.listar') }}">← voltar</a>
+</div>
+
+{% if auditoria.erro %}
+<div class="card">
+  <h2>Falha ao processar</h2>
+  <p style="color:var(--erro)">{{ auditoria.erro }}</p>
+</div>
+{% else %}
+
+<div class="card">
+  <div class="toolbar" style="margin-bottom:0">
+    <h2 style="margin:0">Resultado</h2>
+    <div style="display:flex;gap:10px">
+      <a class="btn" href="{{ url_for('auditorias.painel', auditoria_id=auditoria.id) }}" target="_blank">Abrir painel interativo →</a>
+      <a class="btn ghost" href="{{ url_for('auditorias.resumo_md', auditoria_id=auditoria.id) }}">Baixar resumo (.md)</a>
+    </div>
+  </div>
+
+  {% if resumo %}
+  <div class="kpis">
+    <div class="kpi"><div class="l">Colaboradores</div><div class="v">{{ resumo.colaboradores }}</div></div>
+    <div class="kpi"><div class="l">Horas trabalhadas</div><div class="v">{{ resumo.horas_trabalhadas }} h</div></div>
+    <div class="kpi"><div class="l">Horas extras</div><div class="v">{{ resumo.horas_extras }} h</div></div>
+    <div class="kpi"><div class="l">Não conf. críticas</div><div class="v" style="color:var(--erro)">{{ resumo.nao_conformidades_criticas }}</div></div>
+    <div class="kpi"><div class="l">Não conf. atenção</div><div class="v" style="color:var(--warn)">{{ resumo.nao_conformidades_atencao }}</div></div>
+    <div class="kpi"><div class="l">Índice não conf.</div><div class="v">{{ resumo.indice_nao_conformidade }}</div></div>
+  </div>
+
+  {% if resumo.ocorrencias_por_regra %}
+  <h2 style="margin-top:22px">Por regra</h2>
+  <table>
+    <thead><tr><th>Regra</th><th class="c">Ocorrências</th></tr></thead>
+    <tbody>
+      {% for info in resumo.ocorrencias_por_regra.values() %}
+      <tr><td>{{ info.titulo }}</td><td class="c">{{ info.qtd }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% if resumo.top10_horas_extras %}
+  <h2 style="margin-top:22px">Top 10 em horas extras</h2>
+  <table>
+    <thead><tr><th>#</th><th>Colaborador</th><th>Matrícula</th><th class="c">Horas extras</th></tr></thead>
+    <tbody>
+      {% for item in resumo.top10_horas_extras %}
+      <tr><td>{{ loop.index }}</td><td>{{ item.nome }}</td><td>{{ item.matricula }}</td><td class="c">{{ item.horas_extras }} h</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
+  <form method="post" action="{{ url_for('auditorias.excluir', auditoria_id=auditoria.id) }}"
+        onsubmit="return confirm('Excluir esta auditoria? Não pode ser desfeito.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn perigo">Excluir esta auditoria</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}
