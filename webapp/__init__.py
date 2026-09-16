@@ -53,7 +53,15 @@ def create_app(config_extra: dict | None = None) -> Flask:
         return redirect(url_for("auditorias.listar"))
 
     with app.app_context():
-        db.create_all()
+        try:
+            db.create_all()
+        except Exception as exc:
+            # defesa extra além do --preload do gunicorn (ver Dockerfile/Procfile):
+            # se por algum motivo dois processos ainda colidirem criando as
+            # tabelas ao mesmo tempo, não derruba o worker — as tabelas já
+            # existirão quando a app começar a atender requisições.
+            app.logger.warning(f"db.create_all() falhou (pode ser corrida entre processos, ignorando): {exc}")
+            db.session.rollback()
         _bootstrap_admin(app)
 
     return app
