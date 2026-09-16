@@ -16,7 +16,7 @@
 {% if auditoria.erro %}
 <div class="card">
   <h2>Falha ao processar</h2>
-  <p style="color:var(--erro)">{{ auditoria.erro }}</p>
+  <pre style="color:var(--erro);white-space:pre-wrap;font-size:12px;line-height:1.55;background:#fdecea;padding:12px;border-radius:7px;overflow-x:auto">{{ auditoria.erro }}</pre>
 </div>
 {% else %}
 

@@ -61,9 +61,9 @@ def nova():
             try:
                 periodo = parse_espelho_pdf(str(caminho_pdf))
             except ErroDeLeitura as e:
-                _registrar_erro(nome_pdf, str(e))
-                flash(f"Não consegui ler esse PDF: {e}", "erro")
-                return render_template("nova_auditoria.html")
+                auditoria_id = _registrar_erro(nome_pdf, str(e))
+                flash("Não consegui ler esse PDF — detalhes abaixo.", "erro")
+                return redirect(url_for("auditorias.ver", auditoria_id=auditoria_id))
 
             if nome_efetivo:
                 caminho_efetivo = Path(tmp) / nome_efetivo
@@ -99,9 +99,11 @@ def nova():
     return render_template("nova_auditoria.html")
 
 
-def _registrar_erro(nome_arquivo: str, mensagem: str) -> None:
-    db.session.add(Auditoria(usuario_id=current_user.id, nome_arquivo=nome_arquivo, erro=mensagem))
+def _registrar_erro(nome_arquivo: str, mensagem: str) -> int:
+    auditoria = Auditoria(usuario_id=current_user.id, nome_arquivo=nome_arquivo, erro=mensagem)
+    db.session.add(auditoria)
     db.session.commit()
+    return auditoria.id
 
 
 def _buscar_auditoria_do_usuario(auditoria_id: int) -> Auditoria:

@@ -243,10 +243,13 @@ def parse_espelho_pdf(caminho_pdf: str, debug: bool = False) -> Periodo:
 
         dias = _parse_dias_da_pagina(pagina)
         if not dias:
+            texto_bruto = "\n".join(pagina.linhas_texto)
             raise ErroDeLeitura(
                 f"Página {pagina.numero}: colaborador {info['matricula']} "
                 f"({info.get('nome','?')}) sem nenhum dia reconhecido na tabela — "
-                "o layout de colunas pode diferir do esperado. Rode com --debug."
+                "o layout de colunas pode diferir do esperado nesta página.\n\n"
+                f"Texto bruto extraído da página {pagina.numero}, pra diagnóstico:\n"
+                f"{'-'*60}\n{texto_bruto}\n{'-'*60}"
             )
 
         colaboradores.append(Colaborador(
