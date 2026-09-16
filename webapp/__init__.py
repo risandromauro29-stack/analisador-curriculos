@@ -16,11 +16,20 @@ def create_app(config_extra: dict | None = None) -> Flask:
     app.config.update(
         SECRET_KEY=os.environ.get("SECRET_KEY", "troque-esta-chave-em-producao"),
         SQLALCHEMY_DATABASE_URI=db_url,
-        SQLALCHEMY_ENGINE_OPTIONS={"pool_pre_ping": True},
         MAX_CONTENT_LENGTH=25 * 1024 * 1024,  # 25 MB por upload
     )
     if config_extra:
         app.config.update(config_extra)
+
+    # pool pequeno de propósito: 1 worker gunicorn não precisa de mais que
+    # isso, e cada conexão Postgres consome memória — relevante no plano
+    # free do Render (512MB no total). pool_size/max_overflow são
+    # exclusivos do QueuePool (Postgres/MySQL/...) — SQLite (usado nos
+    # testes e no fallback local) usa StaticPool e não aceita esses args.
+    if not app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite"):
+        app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+            "pool_pre_ping": True, "pool_size": 3, "max_overflow": 2,
+        }
 
     if app.config["SECRET_KEY"] == "troque-esta-chave-em-producao" and not app.debug:
         app.logger.warning(

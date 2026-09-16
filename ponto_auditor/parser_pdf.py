@@ -63,7 +63,11 @@ class _Pagina:
     linhas_texto: list[str] = field(default_factory=list)
 
 
-def _extrair_paginas(caminho_pdf: str) -> list[_Pagina]:
+def _paginas(caminho_pdf: str, debug: bool = False):
+    """Gera as páginas uma a uma em vez de carregar o PDF inteiro na
+    memória de uma vez — importante porque um Cartão Ponto real costuma
+    ter uma página por colaborador (podem ser centenas), e cada página
+    carrega bounding boxes de toda palavra do texto."""
     try:
         import pdfplumber
     except ImportError as exc:  # pragma: no cover - depende do ambiente
@@ -71,13 +75,22 @@ def _extrair_paginas(caminho_pdf: str) -> list[_Pagina]:
             "pdfplumber não instalado. Rode `pip install pdfplumber`."
         ) from exc
 
-    paginas = []
     with pdfplumber.open(caminho_pdf) as pdf:
-        for i, pagina in enumerate(pdf.pages, start=1):
-            palavras = pagina.extract_words(keep_blank_chars=False, use_text_flow=False)
-            texto = pagina.extract_text() or ""
-            paginas.append(_Pagina(numero=i, palavras=palavras, linhas_texto=texto.splitlines()))
-    return paginas
+        for i, pagina_pdf in enumerate(pdf.pages, start=1):
+            palavras = pagina_pdf.extract_words(keep_blank_chars=False, use_text_flow=False)
+            texto = pagina_pdf.extract_text() or ""
+            pagina = _Pagina(numero=i, palavras=palavras, linhas_texto=texto.splitlines())
+            if debug:  # pragma: no cover - utilitário manual
+                print(f"--- página {pagina.numero} ---")
+                for linha in pagina.linhas_texto:
+                    print(linha)
+            yield pagina
+            # libera o cache interno de objetos da página (chars/rects/...)
+            # assim que terminamos com ela — sem isso, pdfplumber mantém
+            # tudo em memória até o `with pdfplumber.open` fechar no final.
+            flush = getattr(pagina_pdf, "flush_cache", None)
+            if callable(flush):
+                flush()
 
 
 def _agrupar_em_linhas(palavras: list[dict], tolerancia: float = 2.5) -> list[list[dict]]:
@@ -214,17 +227,10 @@ def _parse_dias_da_pagina(pagina: _Pagina) -> list[DiaPonto]:
 
 
 def parse_espelho_pdf(caminho_pdf: str, debug: bool = False) -> Periodo:
-    paginas = _extrair_paginas(caminho_pdf)
-    if debug:  # pragma: no cover - utilitário manual
-        for p in paginas:
-            print(f"--- página {p.numero} ---")
-            for l in p.linhas_texto:
-                print(l)
-
     colaboradores: list[Colaborador] = []
     meta_geral: dict = {}
 
-    for pagina in paginas:
+    for pagina in _paginas(caminho_pdf, debug=debug):
         info = _parse_cabecalho_pagina(pagina.linhas_texto)
         if "matricula" not in info:
             continue  # página sem cabeçalho de colaborador (ex.: capa, resumo)
