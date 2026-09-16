@@ -15,9 +15,10 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 
-# --preload: carrega a app (e roda db.create_all()/bootstrap do admin) uma
-# única vez no processo master antes de "forkar" os workers — sem isso, os
-# workers corriam pra criar as tabelas do banco ao mesmo tempo e colidiam
-# ("Worker failed to boot") no primeiro deploy.
+# 1 worker: no plano free (0.1 CPU) mais de um worker não ajuda em nada, e
+# evita dois problemas de uma vez — a corrida de dois processos criando as
+# tabelas do banco ao mesmo tempo, e o problema (conhecido) de conexão
+# Postgres corrompida quando --preload é usado com múltiplos workers (a
+# conexão do processo master fica compartilhada entre os forks).
 # $PORT é injetada pelo Render/Railway/etc. — cai para 8000 fora desses ambientes
-CMD ["sh", "-c", "gunicorn --preload --bind 0.0.0.0:${PORT:-8000} --workers 2 --timeout 120 run:app"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8000} --workers 1 --timeout 120 run:app"]
